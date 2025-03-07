@@ -1,0 +1,337 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Scale Web Interface using KCP Protocol</title>
+    <style>
+      body {
+        font-family: Arial, sans-serif;
+        margin: 1rem;
+        background-color: #f4f4f4;
+      }
+      header {
+        margin-bottom: 1rem;
+      }
+      #log {
+        background: #000;
+        color: #0f0;
+        padding: 0.5rem;
+        height: 250px;
+        overflow-y: scroll;
+        font-family: monospace;
+      }
+      button,
+      input[type="text"] {
+        padding: 0.5rem;
+        margin: 0.2rem;
+      }
+      .command-panel {
+        background-color: #fff;
+        padding: 1rem;
+        border-radius: 8px;
+        box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+        margin-bottom: 1rem;
+      }
+      .command-group {
+        margin-bottom: 1rem;
+      }
+      details {
+        background: #fff;
+        padding: 1rem;
+        border-radius: 8px;
+        box-shadow: inset 0 0 5px rgba(0, 0, 0, 0.1);
+      }
+      table {
+        width: 100%;
+        border-collapse: collapse;
+      }
+      table,
+      th,
+      td {
+        border: 1px solid #999;
+      }
+      th,
+      td {
+        padding: 0.5rem;
+        text-align: left;
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>Scale Web Interface (KCP Protocol)</h1>
+      <p>
+        This web app uses the Web Serial API to connect to a scale that implements the KERN KCP protocol.
+        It polls the scale 1× per second and can record measurement data to a file.
+      </p>
+    </header>
+    <div class="command-panel">
+      <div class="command-group">
+        <button id="connect">Connect to Scale</button>
+        <button id="disconnect" disabled>Disconnect</button>
+      </div>
+      <div class="command-group">
+        <label for="commandInput">Send Custom Command:</label>
+        <input type="text" id="commandInput" placeholder="e.g. S for stable weight" />
+        <button id="sendCmd" disabled>Send Command</button>
+      </div>
+      <div class="command-group">
+        <h3>Common Commands</h3>
+        <!-- Common commands based on the manual -->
+        <button class="cmd" data-cmd="T">Tare (T)</button>
+        <button class="cmd" data-cmd="Z">Zero (Z)</button>
+        <button class="cmd" data-cmd="SI">Read Immediate (SI)</button>
+      </div>
+      <div class="command-group">
+        <h3>Measurement & Recording</h3>
+        <button id="startMeasure" disabled>Start Measurement</button>
+        <button id="stopMeasure" disabled>Stop Measurement</button>
+        <button id="startRecord" disabled>Start Recording</button>
+        <button id="stopRecord" disabled>Stop Recording & Download</button>
+      </div>
+    </div>
+    <h3>Log</h3>
+    <pre id="log"></pre>
+
+    <details open>
+      <summary><strong>List of Useful Commands</strong></summary>
+      <table>
+        <thead>
+          <tr>
+            <th>Command</th>
+            <th>Description</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>@</td>
+            <td>Cancel (resets device)</td>
+          </tr>
+          <tr>
+            <td>T</td>
+            <td>Tare – sets the tare weight</td>
+          </tr>
+          <tr>
+            <td>TI</td>
+            <td>Tare Immediately – taring without waiting for stability</td>
+          </tr>
+          <tr>
+            <td>Z</td>
+            <td>Zero – set new zero after stable reading</td>
+          </tr>
+          <tr>
+            <td>ZI</td>
+            <td>Zero Immediately – set new zero regardless of stability</td>
+          </tr>
+          <tr>
+            <td>S</td>
+            <td>Send stable weight value</td>
+          </tr>
+          <tr>
+            <td>SI</td>
+            <td>Send immediate weight indication</td>
+          </tr>
+          <tr>
+            <td>SIM</td>
+            <td>Set mode of indication (Track, Peak, Peak+, or Peak-)</td>
+          </tr>
+          <tr>
+            <td>U</td>
+            <td>Query/Set display and host unit</td>
+          </tr>
+          <!-- Additional commands can be added here -->
+        </tbody>
+      </table>
+    </details>
+
+    <script>
+      let port;
+      let writer;
+      let measurementInterval = null;
+      let isRecording = false;
+      let recordedData = []; // Array to store {timestamp, data} objects
+
+      const logEl = document.getElementById('log');
+      const connectBtn = document.getElementById('connect');
+      const disconnectBtn = document.getElementById('disconnect');
+      const sendCmdBtn = document.getElementById('sendCmd');
+      const commandInput = document.getElementById('commandInput');
+      const startMeasureBtn = document.getElementById('startMeasure');
+      const stopMeasureBtn = document.getElementById('stopMeasure');
+      const startRecordBtn = document.getElementById('startRecord');
+      const stopRecordBtn = document.getElementById('stopRecord');
+
+      // Append messages with timestamp in the log
+      function appendLog(message) {
+        const now = new Date().toLocaleTimeString();
+        logEl.textContent += `[${now}] ${message}\n`;
+        logEl.scrollTop = logEl.scrollHeight;
+      }
+
+      // Function to connect to the serial port
+      async function connectSerial() {
+        try {
+          port = await navigator.serial.requestPort();
+          await port.open({ baudRate: 9600, dataBits: 8, stopBits: 1, parity: 'none' });
+          appendLog(`Port opened successfully`);
+          sendCmdBtn.disabled = false;
+          disconnectBtn.disabled = false;
+          startMeasureBtn.disabled = false;
+          startRecordBtn.disabled = false;
+          connectBtn.disabled = true;
+
+          writer = port.writable.getWriter();
+          readLoop();
+        } catch (err) {
+          appendLog(`Error: ${err}`);
+        }
+      }
+
+      // Function to continuously read data from serial port
+      async function readLoop() {
+        const textDecoder = new TextDecoderStream();
+        await port.readable.pipeTo(textDecoder.writable);
+        const reader = textDecoder.readable.getReader();
+        try {
+          while (true) {
+            const { value, done } = await reader.read();
+            if (done) break;
+            if (value) {
+              // Log and record the received data
+              const cleaned = value.replace(/\r\n/g, '\\n');
+              appendLog(`Received: ${cleaned}`);
+              if (isRecording) {
+                const timestamp = new Date().toISOString();
+                recordedData.push({ timestamp, data: cleaned });
+              }
+            }
+          }
+        } catch (error) {
+          appendLog(`Read error: ${error}`);
+        } finally {
+          reader.releaseLock();
+        }
+      }
+
+      // Function to send a command with <CR><LF>
+      async function sendCommand(cmd) {
+        if (!writer) return;
+        const fullCmd = cmd.trim() + "\r\n";
+        const data = new TextEncoder().encode(fullCmd);
+        await writer.write(data);
+        appendLog(`Sent: ${cmd}`);
+      }
+
+      // Start periodic measurement polling (once per second)
+      function startMeasurement() {
+        if (measurementInterval !== null) return;
+        measurementInterval = setInterval(() => {
+          sendCommand("SI");
+        }, 1000);
+        appendLog("Measurement started (polling every 1 second).");
+        startMeasureBtn.disabled = true;
+        stopMeasureBtn.disabled = false;
+      }
+
+      // Stop the periodic measurement polling
+      function stopMeasurement() {
+        if (measurementInterval !== null) {
+          clearInterval(measurementInterval);
+          measurementInterval = null;
+          appendLog("Measurement stopped.");
+          startMeasureBtn.disabled = false;
+          stopMeasureBtn.disabled = true;
+        }
+      }
+
+      // Start recording measurements
+      function startRecording() {
+        if (isRecording) return;
+        isRecording = true;
+        recordedData = []; // reset previous recordings
+        appendLog("Recording started.");
+        startRecordBtn.disabled = true;
+        stopRecordBtn.disabled = false;
+      }
+
+      // Stop recording and download CSV file
+      function stopRecording() {
+        if (!isRecording) return;
+        isRecording = false;
+        appendLog("Recording stopped.");
+        startRecordBtn.disabled = false;
+        stopRecordBtn.disabled = true;
+        downloadRecording();
+      }
+
+      // Convert recorded data to CSV and initiate download
+      function downloadRecording() {
+        if (recordedData.length === 0) {
+          appendLog("No data recorded.");
+          return;
+        }
+        let csvContent = "data:text/csv;charset=utf-8,Timestamp,Data\n";
+        recordedData.forEach(item => {
+          csvContent += `${item.timestamp},"${item.data}"\n`;
+        });
+        const encodedUri = encodeURI(csvContent);
+        const link = document.createElement("a");
+        link.setAttribute("href", encodedUri);
+        const now = new Date().toISOString().replace(/[:\-]/g, "").replace(/\..+/, "");
+        link.setAttribute("download", "scale_recording_" + now + ".csv");
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        appendLog("Recording downloaded as CSV.");
+      }
+
+      // Disconnect and close port
+      async function disconnectSerial() {
+        try {
+          stopMeasurement();
+          stopRecording();
+          if (port) {
+            await port.close();
+            appendLog("Port closed.");
+          }
+        } catch (e) {
+          appendLog(`Error closing port: ${e}`);
+        } finally {
+          connectBtn.disabled = false;
+          disconnectBtn.disabled = true;
+          sendCmdBtn.disabled = true;
+          startMeasureBtn.disabled = true;
+          stopMeasureBtn.disabled = true;
+          startRecordBtn.disabled = true;
+          stopRecordBtn.disabled = true;
+        }
+      }
+
+      // Event listeners
+      connectBtn.addEventListener('click', connectSerial);
+      disconnectBtn.addEventListener('click', disconnectSerial);
+      sendCmdBtn.addEventListener('click', () => {
+        const cmd = commandInput.value;
+        if (cmd.length > 0) {
+          sendCommand(cmd);
+          commandInput.value = "";
+        }
+      });
+      document.querySelectorAll('.cmd').forEach((button) => {
+        button.addEventListener('click', () => {
+          const cmd = button.getAttribute('data-cmd');
+          sendCommand(cmd);
+        });
+      });
+      commandInput.addEventListener('keypress', (e) => {
+        if (e.key === "Enter") {
+          sendCmdBtn.click();
+        }
+      });
+      startMeasureBtn.addEventListener('click', startMeasurement);
+      stopMeasureBtn.addEventListener('click', stopMeasurement);
+      startRecordBtn.addEventListener('click', startRecording);
+      stopRecordBtn.addEventListener('click', stopRecording);
+    </script>
+  </body>
+</html>
