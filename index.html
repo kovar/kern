@@ -6,6 +6,8 @@
   <title>Scale Web Interface using KCP Protocol</title>
   <!-- Link to Montserrat font from Google Fonts -->
   <link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@400;700&display=swap" rel="stylesheet">
+  <!-- Add Chart.js library -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <style>
     body {
       font-family: 'Montserrat', sans-serif;
@@ -141,6 +143,41 @@
     .sampling-rate-group {
       margin-top: 0.5rem;
     }
+
+    /* Add styles for the chart container */
+    .chart-container {
+      background: #f9f9f9;
+      border: 2px solid #012D5D;
+      border-radius: 8px;
+      padding: 1rem;
+      margin-bottom: 1rem;
+    }
+
+    .chart-controls {
+      margin-top: 0.5rem;
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 0.5rem;
+    }
+
+    .chart-controls label {
+      margin-right: 0.5rem;
+    }
+
+    #chartCanvas {
+      width: 100%;
+      height: 300px;
+      margin-top: 1rem;
+    }
+
+    /* Make the layout more responsive */
+    @media (max-width: 768px) {
+      .chart-controls {
+        flex-direction: column;
+        align-items: flex-start;
+      }
+    }
   </style>
 </head>
 
@@ -154,6 +191,34 @@
     <strong>Live Read-Out:</strong>
     <span id="currentReading">No reading yet</span><br />
     <small id="currentTime"></small>
+  </div>
+
+  <!-- Add chart container and controls -->
+  <div class="chart-container">
+    <h3>Live Plot</h3>
+    <div class="chart-controls">
+      <div>
+        <label for="timeRange">Time Window:</label>
+        <select id="timeRange">
+          <option value="30">30 seconds</option>
+          <option value="60">1 minute</option>
+          <option value="300" selected>5 minutes</option>
+          <option value="600">10 minutes</option>
+          <option value="1800">30 minutes</option>
+        </select>
+      </div>
+      <div>
+        <label for="yMin">Y Min:</label>
+        <input type="number" id="yMin" placeholder="Auto" step="0.1" />
+      </div>
+      <div>
+        <label for="yMax">Y Max:</label>
+        <input type="number" id="yMax" placeholder="Auto" step="0.1" />
+      </div>
+      <button id="resetZoom">Reset Zoom</button>
+      <button id="clearChart">Clear Data</button>
+    </div>
+    <canvas id="chartCanvas"></canvas>
   </div>
 
   <div class="instructions">
@@ -258,6 +323,8 @@
     let measurementInterval = null;
     let isRecording = false;
     let recordedData = []; // Stores {timestamp, data}
+    let chart; // Chart.js instance
+    let chartData = []; // Data for the chart
 
     // Save original button text values
     const originalTexts = {
@@ -278,6 +345,107 @@
     const currentReadingEl = document.getElementById("currentReading");
     const currentTimeEl = document.getElementById("currentTime");
     const samplingRateInput = document.getElementById("samplingRate");
+    // Chart controls
+    const timeRangeEl = document.getElementById("timeRange");
+    const yMinEl = document.getElementById("yMin");
+    const yMaxEl = document.getElementById("yMax");
+    const resetZoomBtn = document.getElementById("resetZoom");
+    const clearChartBtn = document.getElementById("clearChart");
+
+    // Initialize the chart
+    function initChart() {
+      const ctx = document.getElementById('chartCanvas').getContext('2d');
+      chart = new Chart(ctx, {
+        type: 'line',
+        data: {
+          datasets: [{
+            label: 'Weight Reading',
+            data: chartData,
+            borderColor: '#012D5D',
+            backgroundColor: 'rgba(1, 45, 93, 0.1)',
+            borderWidth: 2,
+            pointRadius: 1,
+            pointHoverRadius: 5,
+            tension: 0.1
+          }]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          scales: {
+            x: {
+              type: 'time',
+              time: {
+                unit: 'second',
+                displayFormats: {
+                  second: 'HH:mm:ss'
+                }
+              },
+              title: {
+                display: true,
+                text: 'Time'
+              }
+            },
+            y: {
+              title: {
+                display: true,
+                text: 'Weight'
+              },
+              beginAtZero: false
+            }
+          },
+          plugins: {
+            tooltip: {
+              callbacks: {
+                label: function(context) {
+                  return `Weight: ${context.parsed.y}`;
+                }
+              }
+            }
+          },
+          animation: false
+        }
+      });
+    }
+
+    // Update the chart with new data and manage the time window
+    function updateChart(value) {
+      if (!chart) return;
+      
+      const now = new Date();
+      const numericValue = parseFloat(value);
+      
+      // Only add valid numeric data
+      if (!isNaN(numericValue)) {
+        chartData.push({x: now, y: numericValue});
+        
+        // Limit data points based on time window
+        const timeWindow = parseInt(timeRangeEl.value) * 1000; // convert to milliseconds
+        const cutoff = now.getTime() - timeWindow;
+        
+        // Remove data points older than the time window
+        while (chartData.length > 0 && chartData[0].x.getTime() < cutoff) {
+          chartData.shift();
+        }
+        
+        // Update chart Y axis if manual values are set
+        if (yMinEl.value !== "" || yMaxEl.value !== "") {
+          if (yMinEl.value !== "") {
+            chart.options.scales.y.min = parseFloat(yMinEl.value);
+          } else {
+            delete chart.options.scales.y.min;
+          }
+          
+          if (yMaxEl.value !== "") {
+            chart.options.scales.y.max = parseFloat(yMaxEl.value);
+          } else {
+            delete chart.options.scales.y.max;
+          }
+        }
+        
+        chart.update();
+      }
+    }
 
     // Append a log message with timestamp.
     function appendLog(message) {
@@ -291,6 +459,9 @@
       const now = new Date().toISOString();
       currentReadingEl.textContent = reading;
       currentTimeEl.textContent = now;
+      
+      // Update chart with new reading
+      updateChart(reading);
     }
 
     // Connect to the serial port.
@@ -405,7 +576,7 @@
         appendLog("No data recorded.");
         return;
       }
-      let csvContent = "data:text/csv;charset=utf-8,Timestamp,Mass [kg]\n";
+      let csvContent = "data:text/csv;charset=utf-8,Timestamp,Mass Readout\n";
       recordedData.forEach(item => {
         csvContent += `${item.timestamp},${item.data}\n`;
       });
@@ -467,6 +638,64 @@
     stopMeasureBtn.addEventListener("click", stopMeasurement);
     startRecordBtn.addEventListener("click", startRecording);
     stopRecordBtn.addEventListener("click", stopRecording);
+
+    // Event Listeners for chart controls
+    resetZoomBtn.addEventListener("click", () => {
+      if (chart) {
+        delete chart.options.scales.y.min;
+        delete chart.options.scales.y.max;
+        yMinEl.value = "";
+        yMaxEl.value = "";
+        chart.update();
+      }
+    });
+
+    clearChartBtn.addEventListener("click", () => {
+      chartData = [];
+      if (chart) {
+        chart.data.datasets[0].data = chartData;
+        chart.update();
+      }
+    });
+
+    timeRangeEl.addEventListener("change", () => {
+      // When time range changes, filter existing data to match new window
+      if (chartData.length > 0 && chart) {
+        const now = new Date();
+        const timeWindow = parseInt(timeRangeEl.value) * 1000; // convert to milliseconds
+        const cutoff = now.getTime() - timeWindow;
+        
+        // Remove data points older than new time window
+        chartData = chartData.filter(point => point.x.getTime() >= cutoff);
+        chart.data.datasets[0].data = chartData;
+        chart.update();
+      }
+    });
+
+    yMinEl.addEventListener("change", () => {
+      if (chart) {
+        if (yMinEl.value !== "") {
+          chart.options.scales.y.min = parseFloat(yMinEl.value);
+        } else {
+          delete chart.options.scales.y.min;
+        }
+        chart.update();
+      }
+    });
+
+    yMaxEl.addEventListener("change", () => {
+      if (chart) {
+        if (yMaxEl.value !== "") {
+          chart.options.scales.y.max = parseFloat(yMaxEl.value);
+        } else {
+          delete chart.options.scales.y.max;
+        }
+        chart.update();
+      }
+    });
+
+    // Initialize chart when the page loads
+    document.addEventListener('DOMContentLoaded', initChart);
   </script>
 </body>
 
