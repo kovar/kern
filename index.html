@@ -69,19 +69,16 @@
     <!-- Sampling rate -->
     <div class="toolbar-group">
       <div class="sampling-inline">
+        <span class="unit-label">Interval</span>
         <input type="number" id="samplingRate" value="1000" min="100" step="100" />
         <span class="unit-label">ms</span>
       </div>
     </div>
 
-    <!-- Demo -->
-    <div class="toolbar-group">
-      <button id="demo">Demo</button>
-    </div>
-
     <div class="toolbar-spacer"></div>
 
-    <!-- Theme toggle -->
+    <!-- Demo + Theme toggle -->
+    <button id="demo">Demo</button>
     <button class="theme-toggle" id="themeToggle" onclick="_kernToggleTheme()" title="Toggle theme">&#127769;</button>
     <script>
       // Set correct icon immediately once button exists
@@ -154,45 +151,46 @@
         <h4>1. Connect to your scale</h4>
         <dl>
           <dt>USB (Chrome/Edge only)</dt>
-          <dd>Click <strong>USB</strong> in the toolbar and select your serial port. This uses the Web Serial API for direct hardware access — no extra software needed.</dd>
+          <dd>Click <strong>USB</strong> and select your serial port. Uses the Web Serial API for direct hardware access &mdash; no extra software needed. Serial config: 9600 baud, 8N1.</dd>
           <dt>Bridge (any browser)</dt>
-          <dd>Start the bridge in a terminal: <code>uv run bridge.py</code>, then click <strong>Bridge</strong>. This relays data over WebSocket so Firefox, Safari, and other browsers can talk to the scale.</dd>
+          <dd>Start the bridge: <code>uv run bridge.py</code>, then click <strong>Bridge</strong>. This relays KCP commands over WebSocket so Firefox, Safari, and remote browsers can talk to the scale.</dd>
         </dl>
 
         <h4>2. Toolbar buttons</h4>
         <dl>
-          <dt>Tare</dt>
-          <dd>Zero out the current weight on the scale (subtracts container weight).</dd>
-          <dt>Zero</dt>
-          <dd>Set the scale's zero reference point.</dd>
-          <dt>SI</dt>
-          <dd>Request a single immediate weight reading from the scale.</dd>
+          <dt>Tare (T)</dt>
+          <dd>Store the current stable weight as the tare value. Subsequent readings show net weight (gross minus tare). The scale waits for stability before taring.</dd>
+          <dt>Zero (Z)</dt>
+          <dd>Set a new zero reference point. After zeroing: tare = 0, net weight = gross weight. The scale waits for stability before zeroing.</dd>
+          <dt>Read (SI)</dt>
+          <dd>Request a single immediate weight reading. Returns the current value regardless of stability &mdash; the response indicates "S" (stable) or "D" (dynamic).</dd>
           <dt>Play / Stop</dt>
-          <dd>Start or stop automatic polling. The scale is queried at the interval shown in the <strong>ms</strong> field (default 1000 ms).</dd>
+          <dd>Start or stop automatic polling. Sends <code>SI</code> at the interval shown in the <strong>ms</strong> field (default 1000 ms). The scale responds with the current weight and unit each time.</dd>
           <dt>Record / Save</dt>
-          <dd><strong>Record</strong> begins capturing readings. <strong>Save</strong> stops recording and downloads a CSV file with timestamps and values.</dd>
+          <dd><strong>Record</strong> captures every reading with a timestamp. <strong>Save</strong> stops and downloads a CSV file.</dd>
         </dl>
 
         <h4>3. Chart controls</h4>
         <p><strong>Window</strong> sets how much history to show (30 s to 30 min). <strong>Y Min/Max</strong> lock the vertical axis. <strong>Reset</strong> returns to auto-scaling. <strong>Clear</strong> erases all data and resets statistics.</p>
 
         <h4>4. Demo mode</h4>
-        <p>Click <strong>Demo</strong> to generate fake scale data and try out the app without hardware.</p>
+        <p>Click <strong>Demo</strong> to generate fake scale data (~250 g with drift and noise) and try out the interface without hardware.</p>
 
         <h4>5. Typical workflow</h4>
-        <p>Connect &rarr; Click <strong>Record</strong> &rarr; Click <strong>Play</strong> &rarr; watch live readings and chart &rarr; Click <strong>Stop</strong> &rarr; Click <strong>Save</strong> to download CSV.</p>
+        <p>Connect &rarr; <strong>Tare</strong> with empty container &rarr; <strong>Record</strong> &rarr; <strong>Play</strong> &rarr; watch live readings and chart &rarr; <strong>Stop</strong> &rarr; <strong>Save</strong> to download CSV.</p>
 
         <h4>Running locally</h4>
-        <p>Don't open <code>index.html</code> directly — ES modules need a web server. Run <code>uv run serve.py</code> and open <strong>http://localhost:8000</strong>.</p>
+        <p>Don't open <code>index.html</code> directly &mdash; ES modules need a web server. Run <code>uv run serve.py</code> and open <strong>http://localhost:8000</strong>.</p>
       </div>
     </details>
 
     <!-- Custom Command -->
     <details>
       <summary>Custom Command</summary>
-      <div class="details-content">
+      <div class="details-content help-content">
+        <p>Send any KCP command. Commands are ASCII, case-sensitive, terminated with CR LF. The scale responds with a status code: <strong>A</strong> = accepted, <strong>L</strong> = logical error, <strong>I</strong> = busy, <strong>ES</strong> = unknown command.</p>
         <div class="custom-command">
-          <input type="text" id="customCmdInput" placeholder="e.g. SI, T, S" data-requires-connection />
+          <input type="text" id="customCmdInput" placeholder="e.g. SI, T, S, U, I2, SIR" data-requires-connection />
           <button id="customCmdSend" data-requires-connection disabled>Send</button>
         </div>
       </div>
@@ -209,26 +207,79 @@
     <!-- Command Reference -->
     <details>
       <summary>KCP Command Reference</summary>
-      <div class="details-content">
+      <div class="details-content help-content">
+        <h4>Weighing &mdash; Basic (Level 0)</h4>
         <table>
           <thead>
-            <tr>
-              <th>Command</th>
-              <th>Description</th>
-            </tr>
+            <tr><th>Command</th><th>Description</th></tr>
           </thead>
           <tbody>
-            <tr><td>@</td><td>Cancel / Reset device</td></tr>
-            <tr><td>T</td><td>Tare — set tare weight (waits for stable)</td></tr>
-            <tr><td>TI</td><td>Tare Immediately</td></tr>
-            <tr><td>Z</td><td>Zero — set new zero (waits for stable)</td></tr>
-            <tr><td>ZI</td><td>Zero Immediately</td></tr>
-            <tr><td>S</td><td>Send stable weight value</td></tr>
-            <tr><td>SI</td><td>Send immediate weight indication</td></tr>
-            <tr><td>SIM</td><td>Set mode of indication (Track, Peak, etc.)</td></tr>
-            <tr><td>U</td><td>Query / set display unit</td></tr>
+            <tr><td>S</td><td>Send stable weight value (waits for stability or timeout)</td></tr>
+            <tr><td>SI</td><td>Send weight value immediately (stable or dynamic)</td></tr>
+            <tr><td>SIR</td><td>Send weight immediately and repeat continuously (~15 Hz default). <code>SIR 500</code> sets 500 ms interval</td></tr>
+            <tr><td>SX</td><td>Send stable weight with one additional digit of precision</td></tr>
+            <tr><td>SXI</td><td>Send weight immediately with additional digit</td></tr>
+            <tr><td>SXIR</td><td>Send weight with additional digit, immediately and repeat</td></tr>
+            <tr><td>T</td><td>Tare &mdash; store next stable weight as tare value</td></tr>
+            <tr><td>TI</td><td>Tare immediately (regardless of stability)</td></tr>
+            <tr><td>TZ</td><td>Combined tare/zero (like the physical button)</td></tr>
+            <tr><td>Z</td><td>Zero &mdash; set new zero point (waits for stability). Clears tare</td></tr>
+            <tr><td>ZI</td><td>Zero immediately (regardless of stability). Clears tare</td></tr>
+            <tr><td>U</td><td>Query current unit. <code>U g</code> sets unit to grams</td></tr>
           </tbody>
         </table>
+
+        <h4>Weighing &mdash; Advanced (Level 1)</h4>
+        <table>
+          <thead>
+            <tr><th>Command</th><th>Description</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>SR</td><td>Send weight on every weight change (send and repeat)</td></tr>
+            <tr><td>TA</td><td>Query or preset a tare weight value. <code>TA 100.00 g</code></td></tr>
+            <tr><td>TAC</td><td>Clear tare value</td></tr>
+            <tr><td>SIM</td><td>Query or set indication mode: T (track), P (peak), P+ (peak positive), P- (peak negative)</td></tr>
+            <tr><td>SMEM</td><td>Read measurement memory / report</td></tr>
+          </tbody>
+        </table>
+
+        <h4>Device (Level 0)</h4>
+        <table>
+          <thead>
+            <tr><th>Command</th><th>Description</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>@</td><td>Cancel / reset &mdash; like power cycling. Returns serial number</td></tr>
+            <tr><td>I0</td><td>List all implemented KCP commands</td></tr>
+            <tr><td>I1</td><td>Query KCP level and version numbers</td></tr>
+            <tr><td>I2</td><td>Query device type, capacity, and unit (e.g. "GAT 6K-4 6000.00 g")</td></tr>
+            <tr><td>I3</td><td>Query firmware version</td></tr>
+            <tr><td>I4</td><td>Query serial number</td></tr>
+          </tbody>
+        </table>
+
+        <h4>Response Format</h4>
+        <p>Responses follow the pattern: <code>&lt;cmd&gt; &lt;status&gt; &lt;data&gt; CR LF</code></p>
+        <table>
+          <thead>
+            <tr><th>Status</th><th>Meaning</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>A</td><td>Accepted / acknowledged</td></tr>
+            <tr><td>L</td><td>Logical error (invalid parameter)</td></tr>
+            <tr><td>I</td><td>Busy (currently executing another command)</td></tr>
+            <tr><td>+</td><td>Overload range</td></tr>
+            <tr><td>-</td><td>Underload range</td></tr>
+            <tr><td>ES</td><td>Unknown command or syntax error</td></tr>
+          </tbody>
+        </table>
+        <p>Weight responses: <code>S S &nbsp;&nbsp;&nbsp;&nbsp;100.00 g</code> &mdash; status "S" = stable, "D" = dynamic. Value is right-aligned, 10 characters with decimal point.</p>
+
+        <h4>Units</h4>
+        <p>g, kg, mg, t (ton), lb, N, kN, tf (ton-force), lbf/klbf, pcs (pieces), %</p>
+
+        <h4>Serial Config</h4>
+        <p>9600 baud, 8 data bits, 1 stop bit, no parity. Protocol: KCP v1.1.2.</p>
       </div>
     </details>
   </main>
