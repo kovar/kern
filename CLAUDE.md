@@ -22,8 +22,6 @@ js/
   ui.js                 → Theme toggle, connection badge, button states, formatting
 
 bridge.py               → WebSocket ↔ serial bridge (pyserial + websockets)
-plot.py                 → Plots mass_readings.csv with Polars + Matplotlib
-
 .github/workflows/static.yml → GitHub Pages deployment (deploys on push to main)
 ```
 
@@ -70,8 +68,3 @@ uv run bridge.py                        # auto-detect serial port
 uv run bridge.py /dev/cu.usbserial-10   # specify port
 ```
 Dependencies (`pyserial`, `websockets`) are declared inline via PEP 723 — `uv` installs them automatically.
-
-**Plot script:**
-```bash
-uv run plot.py     # Plot CSV output
-```
