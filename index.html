@@ -1,0 +1,256 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Kern Scale Interface</title>
+  <link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@400;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="css/styles.css" />
+  <!-- Theme: inline to avoid flash, works even if modules fail -->
+  <script>
+    (function() {
+      var key = 'kern-theme';
+      var stored = localStorage.getItem(key);
+      var theme = stored || (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+      document.documentElement.setAttribute('data-theme', theme);
+      if (!stored) localStorage.setItem(key, theme);
+
+      window._kernToggleTheme = function() {
+        var cur = document.documentElement.getAttribute('data-theme');
+        var next = cur === 'dark' ? 'light' : 'dark';
+        document.documentElement.setAttribute('data-theme', next);
+        localStorage.setItem(key, next);
+        var btn = document.getElementById('themeToggle');
+        if (btn) {
+          btn.textContent = next === 'dark' ? '\u2600\uFE0F' : '\uD83C\uDF19';
+          btn.title = next === 'dark' ? 'Switch to light mode' : 'Switch to dark mode';
+        }
+      };
+    })();
+  </script>
+  <!-- Chart.js + date adapter (pinned versions) -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
+  <script type="module" src="js/main.js"></script>
+</head>
+
+<body>
+  <!-- ── Toolbar ──────────────────────────────────────────── -->
+  <nav class="toolbar">
+    <!-- Connection -->
+    <div class="toolbar-group">
+      <span class="status-dot" id="statusDot"></span>
+      <button id="connectSerial">USB</button>
+      <button id="connectWs">Bridge</button>
+      <input type="text" id="wsUrl" class="ws-url-input" value="ws://localhost:8765" placeholder="ws://host:port" />
+      <button id="disconnect" disabled>Disconnect</button>
+    </div>
+
+    <!-- Scale commands -->
+    <div class="toolbar-group">
+      <button data-cmd="T" data-requires-connection disabled>Tare</button>
+      <button data-cmd="Z" data-requires-connection disabled>Zero</button>
+      <button data-cmd="SI" data-requires-connection disabled>Read</button>
+    </div>
+
+    <!-- Measurement -->
+    <div class="toolbar-group">
+      <button id="startMeasure" data-requires-connection disabled>Play</button>
+      <button id="stopMeasure" disabled>Stop</button>
+    </div>
+
+    <!-- Recording -->
+    <div class="toolbar-group">
+      <button id="startRecord" data-requires-connection disabled>Record</button>
+      <button id="stopRecord" disabled>Save</button>
+    </div>
+
+    <!-- Sampling rate -->
+    <div class="toolbar-group">
+      <div class="sampling-inline">
+        <input type="number" id="samplingRate" value="1000" min="100" step="100" />
+        <span class="unit-label">ms</span>
+      </div>
+    </div>
+
+    <!-- Demo -->
+    <div class="toolbar-group">
+      <button id="demo">Demo</button>
+    </div>
+
+    <div class="toolbar-spacer"></div>
+
+    <!-- Theme toggle -->
+    <button class="theme-toggle" id="themeToggle" onclick="_kernToggleTheme()" title="Toggle theme">&#127769;</button>
+    <script>
+      // Set correct icon immediately once button exists
+      (function() {
+        var d = document.documentElement.getAttribute('data-theme') === 'dark';
+        var b = document.getElementById('themeToggle');
+        if (b) { b.textContent = d ? '\u2600\uFE0F' : '\uD83C\uDF19'; b.title = d ? 'Switch to light mode' : 'Switch to dark mode'; }
+      })();
+    </script>
+  </nav>
+
+  <!-- ── Main Content ─────────────────────────────────────── -->
+  <main class="main-content">
+    <!-- Live Readout -->
+    <div class="readout">
+      <div>
+        <span class="readout-value" id="readoutValue">---</span>
+        <span class="readout-unit" id="readoutUnit"></span>
+      </div>
+      <div class="readout-time" id="readoutTime"></div>
+    </div>
+
+    <!-- Stats Bar -->
+    <div class="stats-bar">
+      <div class="stat-item">
+        <div class="stat-label">Min</div>
+        <div class="stat-value" id="statMin">---</div>
+      </div>
+      <div class="stat-item">
+        <div class="stat-label">Max</div>
+        <div class="stat-value" id="statMax">---</div>
+      </div>
+      <div class="stat-item">
+        <div class="stat-label">Avg</div>
+        <div class="stat-value" id="statMean">---</div>
+      </div>
+      <div class="stat-item">
+        <div class="stat-label">Count</div>
+        <div class="stat-value" id="statCount">0</div>
+      </div>
+    </div>
+
+    <!-- Chart -->
+    <div class="chart-section">
+      <div class="chart-controls">
+        <label for="timeRange">Window</label>
+        <select id="timeRange">
+          <option value="30">30 s</option>
+          <option value="60">1 min</option>
+          <option value="300" selected>5 min</option>
+          <option value="600">10 min</option>
+          <option value="1800">30 min</option>
+        </select>
+        <label for="yMin">Y Min</label>
+        <input type="number" id="yMin" placeholder="Auto" step="0.1" />
+        <label for="yMax">Y Max</label>
+        <input type="number" id="yMax" placeholder="Auto" step="0.1" />
+        <button id="resetZoom">Reset</button>
+        <button id="clearChart">Clear</button>
+      </div>
+      <div class="chart-wrapper">
+        <canvas id="chartCanvas"></canvas>
+      </div>
+    </div>
+
+    <!-- How to Use -->
+    <details open>
+      <summary>How to Use</summary>
+      <div class="details-content help-content">
+        <h4>1. Connect to your scale</h4>
+        <dl>
+          <dt>USB (Chrome/Edge only)</dt>
+          <dd>Click <strong>USB</strong> in the toolbar and select your serial port. This uses the Web Serial API for direct hardware access — no extra software needed.</dd>
+          <dt>Bridge (any browser)</dt>
+          <dd>Start the bridge in a terminal: <code>uv run bridge.py</code>, then click <strong>Bridge</strong>. This relays data over WebSocket so Firefox, Safari, and other browsers can talk to the scale.</dd>
+        </dl>
+
+        <h4>2. Toolbar buttons</h4>
+        <dl>
+          <dt>Tare</dt>
+          <dd>Zero out the current weight on the scale (subtracts container weight).</dd>
+          <dt>Zero</dt>
+          <dd>Set the scale's zero reference point.</dd>
+          <dt>SI</dt>
+          <dd>Request a single immediate weight reading from the scale.</dd>
+          <dt>Play / Stop</dt>
+          <dd>Start or stop automatic polling. The scale is queried at the interval shown in the <strong>ms</strong> field (default 1000 ms).</dd>
+          <dt>Record / Save</dt>
+          <dd><strong>Record</strong> begins capturing readings. <strong>Save</strong> stops recording and downloads a CSV file with timestamps and values.</dd>
+        </dl>
+
+        <h4>3. Chart controls</h4>
+        <p><strong>Window</strong> sets how much history to show (30 s to 30 min). <strong>Y Min/Max</strong> lock the vertical axis. <strong>Reset</strong> returns to auto-scaling. <strong>Clear</strong> erases all data and resets statistics.</p>
+
+        <h4>4. Demo mode</h4>
+        <p>Click <strong>Demo</strong> to generate fake scale data and try out the app without hardware.</p>
+
+        <h4>5. Typical workflow</h4>
+        <p>Connect &rarr; Click <strong>Record</strong> &rarr; Click <strong>Play</strong> &rarr; watch live readings and chart &rarr; Click <strong>Stop</strong> &rarr; Click <strong>Save</strong> to download CSV.</p>
+
+        <h4>Running locally</h4>
+        <p>Don't open <code>index.html</code> directly — ES modules need a web server. Run <code>uv run serve.py</code> and open <strong>http://localhost:8000</strong>.</p>
+      </div>
+    </details>
+
+    <!-- Custom Command -->
+    <details>
+      <summary>Custom Command</summary>
+      <div class="details-content">
+        <div class="custom-command">
+          <input type="text" id="customCmdInput" placeholder="e.g. SI, T, S" data-requires-connection />
+          <button id="customCmdSend" data-requires-connection disabled>Send</button>
+        </div>
+      </div>
+    </details>
+
+    <!-- Log -->
+    <details>
+      <summary>Log</summary>
+      <div class="details-content">
+        <pre class="log-output" id="logOutput"></pre>
+      </div>
+    </details>
+
+    <!-- Command Reference -->
+    <details>
+      <summary>KCP Command Reference</summary>
+      <div class="details-content">
+        <table>
+          <thead>
+            <tr>
+              <th>Command</th>
+              <th>Description</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr><td>@</td><td>Cancel / Reset device</td></tr>
+            <tr><td>T</td><td>Tare — set tare weight (waits for stable)</td></tr>
+            <tr><td>TI</td><td>Tare Immediately</td></tr>
+            <tr><td>Z</td><td>Zero — set new zero (waits for stable)</td></tr>
+            <tr><td>ZI</td><td>Zero Immediately</td></tr>
+            <tr><td>S</td><td>Send stable weight value</td></tr>
+            <tr><td>SI</td><td>Send immediate weight indication</td></tr>
+            <tr><td>SIM</td><td>Set mode of indication (Track, Peak, etc.)</td></tr>
+            <tr><td>U</td><td>Query / set display unit</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </details>
+  </main>
+
+  <!-- Toast notifications -->
+  <div class="toast-container" id="toastContainer"></div>
+
+  <!-- Module load failure banner — hidden by main.js if it loads successfully -->
+  <div id="moduleWarning" style="display:none; position:fixed; top:0; left:0; right:0; z-index:999;
+    background:#dc2626; color:#fff; padding:0.75rem 1rem; text-align:center; font-family:system-ui,sans-serif; font-size:0.9rem;">
+    App modules failed to load. You probably opened this file directly — ES modules require a web server.<br>
+    Run <strong style="font-family:monospace">uv run serve.py</strong> then open <strong>http://localhost:8000</strong>
+  </div>
+  <script>
+    // If opened via file:// or modules don't load within 2s, show the warning
+    window._kernModulesLoaded = false;
+    setTimeout(function() {
+      if (!window._kernModulesLoaded) {
+        document.getElementById('moduleWarning').style.display = 'block';
+      }
+    }, 2000);
+  </script>
+</body>
+
+</html>
