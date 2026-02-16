@@ -4,6 +4,7 @@
 # dependencies = [
 #     "pyserial",
 #     "websockets",
+#     "influxdb-client",
 # ]
 # ///
 """
@@ -21,6 +22,8 @@ The web app connects to ws://localhost:8765 (default).
 """
 
 import asyncio
+import getpass
+import re
 import sys
 
 import serial
@@ -31,6 +34,12 @@ import websockets
 BAUD_RATE = 9600
 WS_HOST = "localhost"
 WS_PORT = 8765
+
+# Matches value + optional unit from Kern scale output, e.g. "  123.45 g"
+WEIGHT_RE = re.compile(r"(-?\d+(?:\.\d+)?)\s*([a-zA-Z%/]*)")
+
+# InfluxDB state (set by setup_influxdb)
+_influx = None  # dict with write_api, bucket, org, measurement, client
 
 
 def find_serial_port():
@@ -68,6 +77,102 @@ def open_serial(port_name):
     )
 
 
+def setup_influxdb():
+    """Interactively configure InfluxDB logging. Returns config dict or None."""
+    global _influx
+    try:
+        answer = input("\nEnable InfluxDB logging? [y/N]: ").strip().lower()
+    except EOFError:
+        return None
+    if answer != "y":
+        return None
+
+    from influxdb_client import InfluxDBClient
+
+    print("\n── InfluxDB Setup ──────────────────────────────────")
+    url = input("URL [http://localhost:8086]: ").strip() or "http://localhost:8086"
+    org = input("Organization: ").strip()
+    bucket = input("Bucket: ").strip()
+    print("API Token")
+    print("  (Find yours at: InfluxDB UI → Load Data → API Tokens)")
+    token = getpass.getpass("  Token: ")
+    measurement = input("Measurement name: ").strip()
+    print("  Use snake_case, e.g. kern_lab1")
+
+    if not all([org, bucket, token, measurement]):
+        print("Missing required fields — InfluxDB logging disabled.")
+        return None
+
+    print("\nTesting connection... ", end="", flush=True)
+    client = InfluxDBClient(url=url, token=token, org=org)
+    try:
+        health = client.health()
+        if health.status != "pass":
+            print(f"✗ ({health.message})")
+            client.close()
+            return None
+    except Exception as e:
+        print(f"✗ ({e})")
+        client.close()
+        return None
+    print("✓")
+
+    write_api = client.write_api()
+    _influx = {
+        "client": client,
+        "write_api": write_api,
+        "bucket": bucket,
+        "org": org,
+        "measurement": measurement,
+    }
+    print(f"InfluxDB logging enabled → {org}/{bucket}/{measurement}\n")
+    return _influx
+
+
+def close_influxdb():
+    """Flush pending writes and close the InfluxDB client."""
+    global _influx
+    if _influx:
+        print("Flushing InfluxDB...", end=" ", flush=True)
+        try:
+            _influx["write_api"].close()
+            _influx["client"].close()
+        except Exception:
+            pass
+        print("done.")
+        _influx = None
+
+
+def write_influx_point(line):
+    """Parse a scale reading and write an InfluxDB point."""
+    if not _influx:
+        return
+    m = WEIGHT_RE.search(line)
+    if not m:
+        return
+    try:
+        value = float(m.group(1))
+    except ValueError:
+        return
+    unit = m.group(2) or "unknown"
+
+    from influxdb_client import Point
+
+    point = (
+        Point(_influx["measurement"])
+        .tag("unit", unit)
+        .field("value", value)
+    )
+    try:
+        _influx["write_api"].write(
+            bucket=_influx["bucket"],
+            org=_influx["org"],
+            record=point,
+        )
+    except Exception as e:
+        print(f"  InfluxDB write error: {e}")
+
+
 async def serial_to_ws(ser, ws):
     """Read lines from serial and send to WebSocket."""
     loop = asyncio.get_event_loop()
@@ -85,6 +190,7 @@ async def serial_to_ws(ser, ws):
                         await ws.send(line)
                     except websockets.ConnectionClosed:
                         return
+                    write_influx_point(line)
         else:
             await asyncio.sleep(0.05)
 
@@ -125,6 +231,8 @@ async def main():
     ser = open_serial(port_name)
     print(f"Serial port opened: {ser.name}")
 
+    setup_influxdb()
+
     print(f"Starting WebSocket server on ws://{WS_HOST}:{WS_PORT}")
     print("Web app can now connect via the Bridge button.\n")
 
@@ -136,4 +244,5 @@ if __name__ == "__main__":
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
+        close_influxdb()
         print("\nBridge stopped.")

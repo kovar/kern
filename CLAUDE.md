@@ -67,4 +67,7 @@ Do NOT open `index.html` directly — ES modules require HTTP, not `file://`.
 uv run bridge.py                        # auto-detect serial port
 uv run bridge.py /dev/cu.usbserial-10   # specify port
 ```
-Dependencies (`pyserial`, `websockets`) are declared inline via PEP 723 — `uv` installs them automatically.
+Dependencies (`pyserial`, `websockets`, `influxdb-client`) are declared inline via PEP 723 — `uv` installs them automatically.
+
+**Optional InfluxDB logging:**
+The bridge can optionally log weight readings to InfluxDB 2.x. At startup it prompts `Enable InfluxDB logging? [y/N]` — answering N (or pressing Enter) skips it entirely. If enabled, it asks for URL, org, bucket, API token, and measurement name, tests the connection, then writes points (`fields={value: float}, tags={unit: str}`) using the batching `WriteApi`.
