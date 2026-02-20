@@ -69,5 +69,9 @@ uv run bridge.py /dev/cu.usbserial-10   # specify port
 ```
 Dependencies (`pyserial`, `websockets`, `influxdb-client`) are declared inline via PEP 723 — `uv` installs them automatically.
 
+**Linux: device not appearing as `/dev/ttyUSB0`**
+
+The Kern scale connects via USB and presents a virtual serial port. If it doesn't appear, ensure you are in the `dialout` group (`sudo usermod -aG dialout $USER`, then log out and back in). On Ubuntu/Debian, the `brltty` package can also block USB serial devices — `sudo apt remove brltty`, then unplug and replug.
+
 **Optional InfluxDB logging:**
 The bridge can optionally log weight readings to InfluxDB 2.x. At startup it prompts `Enable InfluxDB logging? [y/N]` — answering N (or pressing Enter) skips it entirely. If enabled, it asks for URL, org, bucket, API token, and measurement name, tests the connection, then writes points (`fields={value: float}, tags={unit: str}`) using the batching `WriteApi`.

@@ -42,17 +42,44 @@ WEIGHT_RE = re.compile(r"(-?\d+(?:\.\d+)?)\s*([a-zA-Z%/]*)")
 _influx = None  # dict with write_api, bucket, org, measurement, client
 
 
+def _is_usb_port(p):
+    """Return True if this port looks like a USB serial device.
+
+    Checks VID/PID first (most reliable), then falls back to device name
+    patterns for systems where pyserial doesn't populate VID/PID from sysfs.
+    USB serial devices on Linux appear as /dev/ttyUSB* or /dev/ttyACM*;
+    on macOS as /dev/cu.usbserial-* or /dev/cu.usbmodem*.
+    """
+    if p.vid is not None:
+        return True
+    name = p.device.lower()
+    return any(s in name for s in ("ttyusb", "ttyacm", "cu.usb", "cu.wch"))
+
+
 def find_serial_port():
-    """List available serial ports. If more than one, prompt the user to pick."""
-    ports = list(serial.tools.list_ports.comports())
-    if not ports:
+    """List available serial ports, preferring USB devices.
+
+    The Kern scale connects via USB and presents a virtual serial port.
+    We show only USB ports by default and fall back to all ports if none found.
+    """
+    all_ports = list(serial.tools.list_ports.comports())
+    if not all_ports:
         return None
+
+    usb_ports = [p for p in all_ports if _is_usb_port(p)]
+    ports = usb_ports if usb_ports else all_ports
+    if not usb_ports:
+        print("No USB serial devices found — showing all ports:")
+
     if len(ports) == 1:
-        print(f"Found serial port: {ports[0].device}  —  {ports[0].description}")
+        tag = " [USB]" if _is_usb_port(ports[0]) else ""
+        print(f"Found serial port: {ports[0].device}{tag}  —  {ports[0].description}")
         return ports[0].device
-    print("Multiple serial ports found:\n")
+
+    print("USB serial devices found:\n")
     for i, p in enumerate(ports, 1):
-        print(f"  [{i}]  {p.device}  —  {p.description}")
+        vid_pid = f"  VID:PID={p.vid:04X}:{p.pid:04X}" if p.vid is not None else ""
+        print(f"  [{i}]  {p.device}  —  {p.description}{vid_pid}")
     print()
     while True:
         try:
