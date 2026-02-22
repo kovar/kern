@@ -38,6 +38,19 @@ WS_PORT = 8765
 # Matches value + optional unit from Kern scale output, e.g. "  123.45 g"
 WEIGHT_RE = re.compile(r"(-?\d+(?:\.\d+)?)\s*([a-zA-Z%/]*)")
 
+# ─────────────────────────────────────────────────────────────────────────────
+# USER CONFIGURATION
+# Hard-code values here to skip the interactive prompts at startup.
+# Leave a field as None to be prompted interactively.
+# ─────────────────────────────────────────────────────────────────────────────
+SERIAL_PORT          = None   # e.g. "/dev/ttyUSB0" or "/dev/serial/by-id/usb-..."
+INFLUXDB_URL         = None   # e.g. "http://localhost:8086"
+INFLUXDB_ORG         = None   # e.g. "my-org"
+INFLUXDB_BUCKET      = None   # e.g. "sensors"
+INFLUXDB_TOKEN       = None   # e.g. "my-token=="
+INFLUXDB_MEASUREMENT = None   # e.g. "kern_scale"
+# ─────────────────────────────────────────────────────────────────────────────
+
 # InfluxDB state (set by setup_influxdb)
 _influx = None  # dict with write_api, bucket, org, measurement, client
 
@@ -94,41 +107,57 @@ def find_serial_port():
 
 def open_serial(port_name):
     """Open serial port with Kern default settings."""
-    return serial.Serial(
-        port=port_name,
-        baudrate=BAUD_RATE,
-        bytesize=serial.EIGHTBITS,
-        stopbits=serial.STOPBITS_ONE,
-        parity=serial.PARITY_NONE,
-        timeout=0.1,
-    )
+    try:
+        return serial.Serial(
+            port=port_name,
+            baudrate=BAUD_RATE,
+            bytesize=serial.EIGHTBITS,
+            stopbits=serial.STOPBITS_ONE,
+            parity=serial.PARITY_NONE,
+            timeout=0.1,
+            exclusive=True,
+        )
+    except serial.SerialException as e:
+        print(f"Cannot open {port_name}: {e}")
+        print("Is another bridge already using this port?")
+        sys.exit(1)
 
 
 def setup_influxdb():
     """Interactively configure InfluxDB logging. Returns config dict or None."""
     global _influx
-    try:
-        answer = input("\nEnable InfluxDB logging? [y/N]: ").strip().lower()
-    except EOFError:
-        return None
-    if answer != "y":
-        return None
+
+    # Use pre-configured values if all USER CONFIGURATION fields are set
+    if all([INFLUXDB_URL, INFLUXDB_ORG, INFLUXDB_BUCKET, INFLUXDB_TOKEN, INFLUXDB_MEASUREMENT]):
+        url = INFLUXDB_URL
+        org = INFLUXDB_ORG
+        bucket = INFLUXDB_BUCKET
+        token = INFLUXDB_TOKEN
+        measurement = INFLUXDB_MEASUREMENT
+        print(f"\nUsing pre-configured InfluxDB: {org}/{bucket}/{measurement}")
+    else:
+        try:
+            answer = input("\nEnable InfluxDB logging? [y/N]: ").strip().lower()
+        except EOFError:
+            return None
+        if answer != "y":
+            return None
+
+        print("\n── InfluxDB Setup ──────────────────────────────────")
+        url = input("URL [http://localhost:8086]: ").strip() or "http://localhost:8086"
+        org = input("Organization: ").strip()
+        bucket = input("Bucket: ").strip()
+        print("API Token")
+        print("  (Find yours at: InfluxDB UI → Load Data → API Tokens)")
+        token = getpass.getpass("  Token: ")
+        measurement = input("Measurement name: ").strip()
+        print("  Use snake_case, e.g. kern_lab1")
+
+        if not all([org, bucket, token, measurement]):
+            print("Missing required fields — InfluxDB logging disabled.")
+            return None
 
     from influxdb_client import InfluxDBClient
-
-    print("\n── InfluxDB Setup ──────────────────────────────────")
-    url = input("URL [http://localhost:8086]: ").strip() or "http://localhost:8086"
-    org = input("Organization: ").strip()
-    bucket = input("Bucket: ").strip()
-    print("API Token")
-    print("  (Find yours at: InfluxDB UI → Load Data → API Tokens)")
-    token = getpass.getpass("  Token: ")
-    measurement = input("Measurement name: ").strip()
-    print("  Use snake_case, e.g. kern_lab1")
-
-    if not all([org, bucket, token, measurement]):
-        print("Missing required fields — InfluxDB logging disabled.")
-        return None
 
     print("\nTesting connection... ", end="", flush=True)
     client = InfluxDBClient(url=url, token=token, org=org)
@@ -205,8 +234,12 @@ async def serial_to_ws(ser, ws):
     loop = asyncio.get_event_loop()
     buffer = ""
     while True:
-        # Read available bytes in a thread to avoid blocking the event loop
-        data = await loop.run_in_executor(None, ser.read, 256)
+        try:
+            # Read available bytes in a thread to avoid blocking the event loop
+            data = await loop.run_in_executor(None, ser.read, 256)
+        except serial.SerialException as e:
+            print(f"\n  Serial read error: {e}")
+            return
         if data:
             buffer += data.decode("ascii", errors="replace")
             while "\n" in buffer:
@@ -228,7 +261,11 @@ async def ws_to_serial(ser, ws):
         async for message in ws:
             cmd = message.strip()
             if cmd:
-                ser.write((cmd + "\r\n").encode("ascii"))
+                try:
+                    ser.write((cmd + "\r\n").encode("ascii"))
+                except serial.SerialException as e:
+                    print(f"\n  Serial write error: {e}")
+                    return
                 print(f"  → Sent to scale: {cmd}")
     except websockets.ConnectionClosed:
         pass
@@ -248,7 +285,13 @@ async def handler(ws, ser):
 
 
 async def main():
-    port_name = sys.argv[1] if len(sys.argv) > 1 else find_serial_port()
+    if len(sys.argv) > 1:
+        port_name = sys.argv[1]
+    elif SERIAL_PORT:
+        port_name = SERIAL_PORT
+        print(f"Using pre-configured serial port: {port_name}")
+    else:
+        port_name = find_serial_port()
     if not port_name:
         print("No serial ports found. Connect a scale and try again,")
         print("or specify the port: uv run bridge.py /dev/cu.usbserial-10")
