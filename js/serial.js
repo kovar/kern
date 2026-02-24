@@ -70,31 +70,47 @@ export class WebSerialTransport extends EventTarget {
   }
 
   async #readLoop() {
+    const GRACE_MS = 5000;
+    const RETRY_MS = 500;
     const decoder = new TextDecoder();
-    this.#reader = this.#port.readable.getReader();
     this.#readLoopRunning = true;
-    let buffer = '';
-    try {
-      while (this.#readLoopRunning) {
-        const { value, done } = await this.#reader.read();
-        if (done) break;
-        if (value) {
-          buffer += decoder.decode(value, { stream: true });
-          let lines = buffer.split('\n');
-          buffer = lines.pop();
-          for (const line of lines) {
-            const trimmed = line.replace(/\r/g, '').trim();
-            if (trimmed) this.#parseLine(trimmed);
+    let graceStart = null;
+
+    while (this.#readLoopRunning) {
+      try {
+        this.#reader = this.#port.readable.getReader();
+        graceStart = null; // reader acquired — reset grace timer
+        let buffer = '';
+        while (this.#readLoopRunning) {
+          const { value, done } = await this.#reader.read();
+          if (done) break;
+          if (value) {
+            buffer += decoder.decode(value, { stream: true });
+            let lines = buffer.split('\n');
+            buffer = lines.pop();
+            for (const line of lines) {
+              const trimmed = line.replace(/\r/g, '').trim();
+              if (trimmed) this.#parseLine(trimmed);
+            }
           }
         }
+      } catch (err) {
+        if (!this.#readLoopRunning) break;
+        const now = Date.now();
+        if (graceStart === null) {
+          graceStart = now;
+          this.#emit('log', { message: 'Serial hiccup — retrying for up to 5 s…' });
+        }
+        if (now - graceStart < GRACE_MS) {
+          await new Promise(r => setTimeout(r, RETRY_MS));
+        } else {
+          this.#emit('error', { message: 'Read error: ' + err.message });
+          break;
+        }
+      } finally {
+        try { this.#reader?.releaseLock(); } catch (_) {}
+        this.#reader = null;
       }
-    } catch (err) {
-      if (this.#readLoopRunning) {
-        this.#emit('error', { message: 'Read error: ' + err.message });
-      }
-    } finally {
-      try { this.#reader.releaseLock(); } catch (_) {}
-      this.#reader = null;
     }
   }
 
