@@ -536,12 +536,13 @@ def write_influx_point(line):
         return
     unit = m.group(2) or "unknown"
 
-    from influxdb_client import Point
+    from influxdb_client import Point, WritePrecision
 
     point = (
         Point(_influx["measurement"])
         .tag("unit", unit)
         .field("value", value)
+        .time(datetime.datetime.now(datetime.timezone.utc), WritePrecision.MILLISECONDS)
     )
     try:
         _influx["write_api"].write(
